@@ -1,0 +1,74 @@
+name: quran_complete
+description: "A comprehensive Quran application with Bangla translation and audio."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.8
+
+dependencies:
+  flutter:
+    sdk: flutter
+  google_mobile_ads: ^5.1.0
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.5.5
+  provider: ^6.1.1
+  supabase_flutter: ^2.6.0
+  google_fonts: ^6.1.0
+  just_audio: ^0.9.36
+  just_audio_background: ^0.0.1-beta.15
+  audio_session: ^0.1.25
+  dio: ^5.9.2
+  path: ^1.9.1
+  quran: ^1.2.9
+  connectivity_plus: ^6.0.3
+  scrollable_positioned_list: ^0.3.8
+  draggable_scrollbar: ^0.1.0
+  media_kit: ^1.1.10
+  media_kit_video: ^1.1.11
+  media_kit_libs_android_video: ^1.1.10
+  youtube_explode_dart: ^2.3.0
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  http: ^1.2.0
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.4.7
+
+flutter:
+  uses-material-design: true # Must be indented exactly 2 spaces
+  assets:
+    - assets/logo/applogo.png
+
+# Fixes the App Icon stretching on your TECNO KM7
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/logo/applogo.png"
+
+  # Crucial Change for perfect fitting:
+  # Fill the background layer with the same green color.
+  adaptive_icon_background: "#075E54" # A rich green matching the logo
+
+  # The logo goes in the foreground layer.
+  adaptive_icon_foreground: "assets/logo/applogo.png"
+
+# Recommended Splash configuration
+flutter_native_splash:
+  # CHANGE 1: Set the main splash background to white
+  color: "#FFFFFF"
+  image: "assets/logo/applogo.png"
+
+  android_gravity: center
+  ios_content_mode: center
+
+  # CHANGE 2: Specific configuration for Android 12+ (which your TECNO KM7 uses)
+  android_12:
+    image: "assets/logo/applogo.png"
+    # Set the Android 12 background to white
+    color: "#FFFFFF"
+    # This prevents a different-colored circle from appearing around the logo
+    icon_background_color: "#FFFFFF"
