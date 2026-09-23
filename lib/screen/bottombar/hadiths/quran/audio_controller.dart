@@ -17,6 +17,9 @@ class AudioController extends ChangeNotifier {
     ),
   );
 
+  final StreamController<int> _suraChangeStreamController = StreamController<int>.broadcast();
+  Stream<int> get onSuraChanged => _suraChangeStreamController.stream;
+
   int _currentAyaIndex = -1;
   int get currentAyaIndex => _currentAyaIndex;
   int _currentSuraId = -1;
@@ -99,10 +102,28 @@ class AudioController extends ChangeNotifier {
   }
 
   void _initListeners() {
+    // 🌟 1. Listen to play/pause state changes instantly
+    _audioPlayer.playingStream.listen((isPlaying) {
+      notifyListeners();
+    });
+
+    _audioPlayer.playbackEventStream.listen((event) {
+      // General event handling stream
+    }, onError: (Object e, StackTrace stackTrace) {
+      debugPrint("❌ Audio playback stream error: $e");
+
+      if (e.toString().contains('404') || e.toString().contains('InvalidResponseCodeException')) {
+        debugPrint("⚠️ Skipping missing or broken audio file (404)...");
+        if (_audioPlayer.hasNext) {
+          _audioPlayer.seekToNext();
+          _audioPlayer.play();
+        }
+      }
+    });
+
     _audioPlayer.currentIndexStream.listen((index) {
       if (_isSwappingSource) return;
 
-      // Ensure we are in playlist mode before handling automatic pre-fetching steps
       if (index != null && _concatenatingSource != null && index < _concatenatingSource!.length) {
         final activeSource = _concatenatingSource!.children[index];
 
@@ -113,19 +134,25 @@ class AudioController extends ChangeNotifier {
             int actualAyaNumber = mediaItem.extras!['aya_id'] ?? -1;
             int actualSuraNumber = mediaItem.extras!['sura_id'] ?? -1;
 
-            debugPrint("🎯 Sync Verified -> Native Index: $index | Playing Aya: $actualAyaNumber");
+            if (actualSuraNumber != _currentSuraId && actualSuraNumber != -1) {
+              _suraChangeStreamController.add(actualSuraNumber);
+            }
+
+            debugPrint("🎯 Sync Verified -> Native Index: $index | Playing Surah: $actualSuraNumber, Aya: $actualAyaNumber");
 
             _currentAyaIndex = actualAyaNumber;
             _currentSuraId = actualSuraNumber;
             notifyListeners();
 
-            _preFetchNext(index + 1);
+            // Only pre-fetch if it's ayah-by-ayah mode (not full surah mode)
+            if (mediaItem.extras!['is_full_surah'] != true) {
+              _preFetchNext(index + 1);
+            }
           }
         }
       }
-      // 🌟 FIXED: Keep manual single-track playback properties safely synchronized in UI state
       else if (index != null && _audioPlayer.audioSource != null && _concatenatingSource == null) {
-        _currentAyaIndex = 0; // Explicitly set to 0 for full Surah play mode
+        _currentAyaIndex = 0;
         notifyListeners();
       }
     });
@@ -145,7 +172,7 @@ class AudioController extends ChangeNotifier {
 
   Future<void> seek(Duration position) async {
     await _audioPlayer.seek(position);
-    notifyListeners(); // Notify UI to redraw progress changes if needed
+    notifyListeners();
   }
 
   Future<void> _initAudioSession() async {
@@ -167,8 +194,6 @@ class AudioController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // 1. Add 'String surahName' as an explicit structural argument here 💎
-  // Ensure your method signature looks EXACTLY like this (2 arguments):
   Future<void> playAyaAudio(int index, List<dynamic> allAyas) async {
     if (allAyas.isEmpty || index < 0 || index >= allAyas.length) {
       throw ArgumentError("Invalid playlist structure index limits.");
@@ -187,7 +212,6 @@ class AudioController extends ChangeNotifier {
       final String folderName = _selectedReciter['folder_name'] ?? 'Alafasy_128kbps';
       final List<AudioSource> dynamicSources = [];
 
-      // Core 114 Surah Names localized lookup mapping list
       const List<String> surahNames = [
         "Al-Fatiha", "Al-Baqarah", "Al-Imran", "An-Nisa", "Al-Ma'idah", "Al-An'am",
         "Al-A'raf", "Al-Anfal", "At-Tawbah", "Yunus", "Hud", "Yusuf", "Ar-Ra'd",
@@ -218,7 +242,6 @@ class AudioController extends ChangeNotifier {
         final int sNum = keys['sura']!;
         final int aNum = keys['aya']!;
 
-        // Safely access Surah translation index
         final String surahName = (sNum > 0 && sNum <= surahNames.length)
             ? surahNames[sNum - 1]
             : "Surah $sNum";
@@ -229,7 +252,7 @@ class AudioController extends ChangeNotifier {
 
         final mediaTag = MediaItem(
           id: fileName,
-          album: surahName,    // 🎯 Displays Surah name dynamically in the system notification drawer
+          album: surahName,
           title: "Ayah $aNum",
           extras: {
             'sura_id': sNum,
@@ -278,6 +301,274 @@ class AudioController extends ChangeNotifier {
     }
   }
 
+  /// 🌟 FIXED: Ensures Full Surahs play consecutively one after another from the beginning!
+  Future<void> playSurahAudio(int initialIndex, List<dynamic> surahList) async {
+    if (surahList.isEmpty || initialIndex < 0 || initialIndex >= surahList.length) {
+      throw ArgumentError("Invalid surah playlist index limits.");
+    }
+
+    try {
+      _isSettingSource = true;
+      _playlist = surahList;
+      _isBuffering = true;
+      _currentManualUrl = null;
+      notifyListeners();
+
+      await _audioPlayer.setVolume(1.0);
+      await _audioPlayer.stop();
+
+      final List<AudioSource> dynamicSources = [];
+      final String folderName = _selectedReciter['folder_name'] ?? 'Alafasy_192kbps';
+
+      for (int i = 0; i < surahList.length; i++) {
+        final surahData = surahList[i];
+        if (surahData == null) continue;
+
+        final int suraId = int.tryParse(surahData['id'].toString()) ?? (i + 1);
+        final String suraName = surahData['name_en'] ?? "Surah $suraId";
+
+        // Standard 3-digit padded Surah filename format (e.g., 001.mp3) inside reciter's folder
+        final String paddedSuraId = suraId.toString().padLeft(3, '0');
+        final String remoteUrl = "https://everyayah.com/data/$folderName/surahs/$paddedSuraId.mp3";
+
+        final mediaTag = MediaItem(
+          id: paddedSuraId,
+          album: "Holy Quran",
+          title: suraName,
+          extras: {
+            'sura_id': suraId,
+            'aya_id': 0, // 0 signifies full surah file start
+            'is_full_surah': true,
+            'global_index': i,
+          },
+        );
+
+        dynamicSources.add(AudioSource.uri(
+          Uri.parse(surahData['url'] ?? remoteUrl),
+          tag: mediaTag,
+        ));
+      }
+
+      _concatenatingSource = ConcatenatingAudioSource(
+        useLazyPreparation: true,
+        children: dynamicSources,
+      );
+
+      await _audioPlayer.setAudioSource(
+        _concatenatingSource!,
+        initialIndex: initialIndex,
+        preload: false,
+      );
+
+      _isBuffering = false;
+      notifyListeners();
+
+      await _audioPlayer.play();
+
+    } catch (e) {
+      debugPrint("❌ 🎵 Surah Pipeline Error: $e");
+      _isBuffering = false;
+      _isSettingSource = false;
+      notifyListeners();
+      rethrow;
+    } finally {
+      _isSettingSource = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> playContinuousFromSurahFast(
+      int targetSuraId,
+      int targetAyaId,
+      List<dynamic> currentSurahAyas,
+      List<dynamic> allSurasMasterList,
+      ) async {
+    try {
+      _isSettingSource = true;
+      _isBuffering = true;
+      notifyListeners();
+
+      await _audioPlayer.setVolume(1.0);
+      await _audioPlayer.stop();
+
+      final List<AudioSource> masterDynamicSources = [];
+      final List<dynamic> masterFlatPlaylist = [];
+      int targetInitialIndex = 0;
+      bool foundTarget = false;
+
+      final directory = await getApplicationDocumentsDirectory();
+      final String folderName = _selectedReciter['folder_name'] ?? 'Alafasy_128kbps';
+
+      for (int aIndex = 0; aIndex < currentSurahAyas.length; aIndex++) {
+        final aya = currentSurahAyas[aIndex];
+        if (aya == null) continue;
+
+        final rawAyaId = aya['aya_id'] ?? aya['verse_id'] ?? aya['id'];
+        final int aNum = int.tryParse(rawAyaId.toString()) ?? (aIndex + 1);
+
+        if (!foundTarget && aNum == targetAyaId) {
+          targetInitialIndex = masterFlatPlaylist.length;
+          foundTarget = true;
+        }
+
+        masterFlatPlaylist.add(aya);
+
+        final String paddedS = targetSuraId.toString().padLeft(3, '0');
+        final String paddedA = aNum.toString().padLeft(3, '0');
+        final String fileName = '$paddedS$paddedA.mp3';
+
+        final mediaTag = MediaItem(
+          id: fileName,
+          album: "Surah $targetSuraId",
+          title: "Ayah $aNum",
+          extras: {'sura_id': targetSuraId, 'aya_id': aNum},
+        );
+
+        final String localPath = p.join(directory.path, 'audio', folderName, fileName);
+        if (File(localPath).existsSync()) {
+          masterDynamicSources.add(AudioSource.file(localPath, tag: mediaTag));
+        } else {
+          final String remoteUrl = "https://everyayah.com/data/$folderName/$fileName";
+          masterDynamicSources.add(AudioSource.uri(Uri.parse(remoteUrl), tag: mediaTag));
+        }
+      }
+
+      _playlist = masterFlatPlaylist;
+      _concatenatingSource = ConcatenatingAudioSource(
+        useLazyPreparation: true,
+        children: masterDynamicSources,
+      );
+
+      await _audioPlayer.setAudioSource(
+        _concatenatingSource!,
+        initialIndex: targetInitialIndex,
+        preload: false,
+      );
+
+      _isBuffering = false;
+      notifyListeners();
+      await _audioPlayer.play();
+
+      _appendRemainingSurahsInBackground(targetSuraId, allSurasMasterList);
+
+    } catch (e) {
+      debugPrint("❌ Instant Continuous Playback Error: $e");
+      _isBuffering = false;
+      _isSettingSource = false;
+      notifyListeners();
+    } finally {
+      _isSettingSource = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _appendRemainingSurahsInBackground(int currentSuraId, List<dynamic> allSurasMasterList) async {
+    try {
+      // 1. Ensure the master list is strictly sorted by Surah ID ascending (1 to 114)
+      final sortedMasterList = List<dynamic>.from(allSurasMasterList)..sort((a, b) {
+        int idA = int.tryParse(a['id']?.toString() ?? a['chapter_number']?.toString() ?? a['index']?.toString() ?? '0') ?? 0;
+        int idB = int.tryParse(b['id']?.toString() ?? b['chapter_number']?.toString() ?? b['index']?.toString() ?? '0') ?? 0;
+        return idA.compareTo(idB);
+      });
+
+      // 2. Find the exact start index using the sorted list
+      int suraStartIndex = sortedMasterList.indexWhere((s) {
+        int id = int.tryParse(s['id']?.toString() ?? s['chapter_number']?.toString() ?? s['index']?.toString() ?? '0') ?? 0;
+        return id == currentSuraId;
+      });
+
+      if (suraStartIndex == -1 || suraStartIndex >= sortedMasterList.length - 1) {
+        debugPrint("⚠️ Current Surah ID $currentSuraId not found or is the last surah.");
+        return;
+      }
+
+      final directory = await getApplicationDocumentsDirectory();
+      final String folderName = _selectedReciter['folder_name'] ?? 'Alafasy_128kbps';
+
+      // 3. Loop sequentially through all subsequent surahs
+      for (int sIndex = suraStartIndex + 1; sIndex < sortedMasterList.length; sIndex++) {
+        final suraItem = sortedMasterList[sIndex];
+        if (suraItem == null) continue;
+
+        final int? sNum = int.tryParse(suraItem['id']?.toString() ?? '') ??
+            int.tryParse(suraItem['chapter_number']?.toString() ?? '') ??
+            int.tryParse(suraItem['index']?.toString() ?? '');
+
+        if (sNum == null) continue;
+
+        List<dynamic> suraAyas = [];
+        try {
+          final response = await _dio.get("https://api.quran.com/api/v4/verses/by_chapter/$sNum?language=bn&words=false");
+          if (response.statusCode == 200 && response.data != null) {
+            suraAyas = response.data['verses'] ?? [];
+          }
+        } catch (e) {
+          debugPrint("⚠️ Failed to fetch verses for background Surah $sNum: $e");
+          continue;
+        }
+
+        if (suraAyas.isEmpty || _concatenatingSource == null) continue;
+
+        List<AudioSource> newSources = [];
+        List<dynamic> tempPlaylistBatch = [];
+
+        for (int aIndex = 0; aIndex < suraAyas.length; aIndex++) {
+          final aya = suraAyas[aIndex];
+          if (aya == null) continue;
+
+          // 🌟 CORRECTED: Parse verse number properly from Quran.com API structure (verse_number or verse_key like "2:1")
+          int aNum = aIndex + 1;
+          if (aya['verse_number'] != null) {
+            aNum = int.tryParse(aya['verse_number'].toString()) ?? (aIndex + 1);
+          } else if (aya['verse_key'] != null) {
+            final parts = aya['verse_key'].toString().split(':');
+            if (parts.length > 1) {
+              aNum = int.tryParse(parts[1]) ?? (aIndex + 1);
+            }
+          }
+
+          // Inject computed keys back into the map so local playlist state matches sync listeners
+          final enrichedAya = Map<String, dynamic>.from(aya);
+          enrichedAya['sura_id'] = sNum;
+          enrichedAya['aya_id'] = aNum;
+
+          tempPlaylistBatch.add(enrichedAya);
+
+          final String paddedS = sNum.toString().padLeft(3, '0');
+          final String paddedA = aNum.toString().padLeft(3, '0');
+          final String fileName = '$paddedS$paddedA.mp3';
+
+          final mediaTag = MediaItem(
+            id: fileName,
+            album: "Surah $sNum",
+            title: "Ayah $aNum",
+            extras: {
+              'sura_id': sNum,
+              'aya_id': aNum,
+              'is_full_surah': false,
+            },
+          );
+
+          final String localPath = p.join(directory.path, 'audio', folderName, fileName);
+          if (File(localPath).existsSync()) {
+            newSources.add(AudioSource.file(localPath, tag: mediaTag));
+          } else {
+            final String remoteUrl = "https://everyayah.com/data/$folderName/$fileName";
+            newSources.add(AudioSource.uri(Uri.parse(remoteUrl), tag: mediaTag));
+          }
+        }
+
+        // 4. Atomic Push: Update UI playlist and Audio Player source together
+        _playlist.addAll(tempPlaylistBatch);
+        await _concatenatingSource!.addAll(newSources);
+
+        debugPrint("➕ Successfully chained Surah $sNum with ${newSources.length} ayahs starting from Ayah 1.");
+      }
+    } catch (e) {
+      debugPrint("⚠️ Background surah chaining exception: $e");
+    }
+  }
+
   Future<void> cacheAndPrepareTrack(int targetIndex, List<dynamic> ayahDataList) async {
     if (targetIndex < 0 || targetIndex >= ayahDataList.length) return;
 
@@ -322,14 +613,12 @@ class AudioController extends ChangeNotifier {
 
   Future<void> _preFetchNext(int targetIndex) async {
     if (targetIndex < 0 || targetIndex >= _playlist.length) return;
+    if (_isSwappingSource) return; // Prevent concurrent swapping conflicts
 
     try {
       final networkCheck = await InternetAddress.lookup('google.com');
       if (networkCheck.isEmpty || networkCheck[0].rawAddress.isEmpty) return;
     } catch (_) {
-      debugPrint("📡 Offline Mode Active: Skipping pre-fetch down-streams.");
-      _isSwappingSource = false;
-      notifyListeners();
       return;
     }
 
@@ -349,8 +638,12 @@ class AudioController extends ChangeNotifier {
       _ensureFileExists(url, localPath).then((downloadedSuccess) async {
         _downloadQueue.remove(url);
 
-        if (downloadedSuccess && _concatenatingSource != null) {
+        // Verify concatenating source and player state before mutating
+        if (downloadedSuccess && _concatenatingSource != null && !_isSettingSource) {
           if (targetIndex < _concatenatingSource!.length) {
+            // Skip live-swapping if this is the currently active track to prevent stutter/loops
+            if (_audioPlayer.currentIndex == targetIndex) return;
+
             try {
               _isSwappingSource = true;
               notifyListeners();
@@ -364,10 +657,13 @@ class AudioController extends ChangeNotifier {
 
               final newFileSource = AudioSource.file(localPath, tag: dynamicTagReference);
 
+              // Safely insert then remove to avoid index out-of-bounds shifts
               await _concatenatingSource!.insert(targetIndex, newFileSource);
-              await _concatenatingSource!.removeAt(targetIndex + 1);
+              if (targetIndex + 1 < _concatenatingSource!.length) {
+                await _concatenatingSource!.removeAt(targetIndex + 1);
+              }
 
-              debugPrint("🔄 Live-Swapped index $targetIndex to local file.");
+              debugPrint("🔄 Live-Swapped index $targetIndex to local file safely.");
             } catch (e) {
               debugPrint("❌ Failed background live-swap transaction: $e");
             } finally {
@@ -377,7 +673,6 @@ class AudioController extends ChangeNotifier {
           }
         }
       }).catchError((error) {
-        debugPrint("❌ Prefetch Worker async task caught unhandled failure: $error");
         _downloadQueue.remove(url);
         _isSwappingSource = false;
         notifyListeners();
@@ -451,19 +746,15 @@ class AudioController extends ChangeNotifier {
     try {
       String secureUrl = url.trim().replaceFirst("http://", "https://");
 
-      // 1. Instantly trigger loading indicators to prevent double taps
       _isSettingSource = true;
       _isBuffering = true;
       _currentManualUrl = secureUrl;
       _loadingUrl = secureUrl;
       notifyListeners();
 
-      // 2. Shut down existing playlists to isolate proxy tasks cleanly
       await _audioPlayer.stop();
       _concatenatingSource = null;
 
-      // 📜 Step A: Extract Surah ID from URL if calling ArchiveAudioHelper format
-      // Looks for filenames matching patterns like "001 - Al-Fatihah..."
       int suspectedSuraId = 1;
       String printableTitle = "Special Recitation";
 
@@ -476,23 +767,19 @@ class AudioController extends ChangeNotifier {
           suspectedSuraId = parsedId;
           printableTitle = fileNameOnly.replaceAll('.ogg', '').replaceAll('.mp3', '');
         }
-      } catch (_) {
-        // Fallback gracefully if url parsing fails on non-standard formats
-      }
+      } catch (_) {}
 
-      // 📜 Step B: Construct a complete validation Tag to satisfy background assertion check
       final manualMediaTag = MediaItem(
         id: secureUrl,
         album: "Surah Full Audio",
         title: printableTitle,
         extras: {
           'sura_id': suspectedSuraId,
-          'aya_id': 0, // 0 indicates full surah streaming mode
+          'aya_id': 0,
           'is_manual': true,
         },
       );
 
-      // 3. Set the audio source WITH the validation background tag assigned!
       await _audioPlayer.setAudioSource(
         AudioSource.uri(
           Uri.parse(secureUrl),
@@ -500,12 +787,11 @@ class AudioController extends ChangeNotifier {
             'User-Agent': 'Mozilla/5.0',
             'Accept': '*/*',
           },
-          tag: manualMediaTag, // 👈 FIXED: This satisfies the validation loop constraint!
+          tag: manualMediaTag,
         ),
         preload: true,
       ).timeout(const Duration(seconds: 20));
 
-      // 4. Clear the loading indicator right before firing playback command
       _loadingUrl = null;
       notifyListeners();
 
@@ -552,13 +838,18 @@ class AudioController extends ChangeNotifier {
   }
 
   void togglePlay() {
-    _audioPlayer.playing ? _audioPlayer.pause() : _audioPlayer.play();
-    notifyListeners();
+    if (_audioPlayer.playing) {
+      _audioPlayer.pause();
+    } else {
+      _audioPlayer.play();
+    }
+    notifyListeners(); // Force immediate update
   }
 
   @override
   void dispose() {
     _audioPlayer.dispose();
+    _suraChangeStreamController.close();
     super.dispose();
   }
 }

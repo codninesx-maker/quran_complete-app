@@ -13,6 +13,8 @@ Widget _buildInlineRowControls({
       final bool isThisRowLoading = audioController.loadingUrl == trackUrl;
       final bool isEnginePlaying = audioController.isPlaying;
 
+      print("isCurrentTrack: $isCurrentTrack | currentManualUrl: ${audioController.currentManualUrl} | trackUrl: $trackUrl");
+
       // 1. Show progress indicator if the track is network caching or buffering
       if (isThisRowLoading || (isCurrentTrack && audioController.isBuffering)) {
         return Container(
@@ -46,6 +48,7 @@ Widget _buildInlineRowControls({
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+
           // 10s Rewind Button
           IconButton(
             constraints: const BoxConstraints(),
@@ -75,6 +78,7 @@ Widget _buildInlineRowControls({
             padding: const EdgeInsets.symmetric(horizontal: 4),
             icon: const Icon(Icons.forward_10, size: 24, color: Colors.black54),
             onPressed: () {
+              if (totalDuration == Duration.zero) return;
               final target = currentPos + const Duration(seconds: 10);
               audioController.seek(target > totalDuration ? totalDuration : target);
             },

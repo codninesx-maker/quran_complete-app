@@ -19,15 +19,46 @@ class DashboardController extends ChangeNotifier {
   DashboardController(this._audioController) {
     fetchReciters();
     loadBookmarksFromDisk();
-    _audioController.addListener(() {
-      if (_currentAyaIndex != _audioController.currentAyaIndex) {
-        _currentAyaIndex = _audioController.currentAyaIndex;
-        // Postpone the UI update until the next frame to avoid Gralloc errors
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          notifyListeners();
-        });
+    _audioController.addListener(_handleAudioControllerUpdate);
+  }
+
+  void _handleAudioControllerUpdate() {
+    // 🌟 1. Track Aya index changes
+    if (_currentAyaIndex != _audioController.currentAyaIndex) {
+      _currentAyaIndex = _audioController.currentAyaIndex;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        notifyListeners();
+      });
+    }
+
+    // 🌟 2. Track Sura ID changes automatically when audio transitions to the next Sura
+    final int? activeAudioSuraId = _audioController.currentPlayingSuraId;
+    if (activeAudioSuraId != null && activeAudioSuraId != -1 && activeAudioSuraId != _currentSuraId) {
+      _currentSuraId = activeAudioSuraId;
+
+      // Automatically update the selected sura detail metadata if you have the suras list loaded
+      if (_suras.isNotEmpty) {
+        final matchingSura = _suras.firstWhere(
+              (s) => (int.tryParse(s['id'].toString()) ?? -1) == activeAudioSuraId,
+          orElse: () => {},
+        );
+        if (matchingSura.isNotEmpty) {
+          _selectedSuraDetail = matchingSura;
+          _syncCurrentSuraViewState();
+        }
       }
-    });
+
+      // Automatically fetch and load the new Sura's ayas for the active screen!
+      fetchAyas(activeAudioSuraId);
+    }
+  }
+
+  @override
+  void dispose() {
+    _audioController.removeListener(_handleAudioControllerUpdate);
+    // Only dispose _audioController here if DashboardController owns it exclusively.
+    // _audioController.dispose();
+    super.dispose();
   }
 
   int _selectedIndex = 0;
@@ -126,12 +157,6 @@ class DashboardController extends ChangeNotifier {
       return _selectedSuraDetail!['name_bn'] ?? _selectedSuraDetail!['name_en'] ?? 'Quran';
     }
     return 'Quran Majeed';
-  }
-
-  @override
-  void dispose() {
-    _audioController.dispose();
-    super.dispose();
   }
 
   void selectSura(Map<String, dynamic> sura, {List<Map<String, dynamic>>? preLoadedAyas}) {
@@ -448,10 +473,15 @@ class DashboardController extends ChangeNotifier {
       _reciters = List<Map<String, dynamic>>.from(data);
 
       if (_reciters.isNotEmpty && _selectedReciter == null) {
-        _selectedReciter = _reciters[0];
+        // 🌟 Search for Al Matroud first (case-insensitive search on english name)
+        final alMatroud = _reciters.firstWhere(
+              (r) => (r['name_en'] ?? '').toLowerCase().contains('matroud'),
+          orElse: () => _reciters[0], // Fallback to index 0 if not found
+        );
+
+        _selectedReciter = alMatroud;
 
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          // Calling the method correctly here
           _audioController.updateReciter(_selectedReciter!);
           notifyListeners();
         });

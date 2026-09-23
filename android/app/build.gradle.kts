@@ -3,8 +3,7 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id("org.jetbrains.kotlin.android")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -17,27 +16,28 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.rxai.quran_complete"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    compileSdk = 36
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        @Suppress("DEPRECATION")
-        jvmTarget = JavaVersion.VERSION_17.toString()
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 
     // Explicit production version variables
-    val currentVersionCode = 2
-    val currentVersionName = "1.0.1"
+    val currentVersionCode = 3
+    val currentVersionName = "2.0.0"
 
     defaultConfig {
         applicationId = "com.rxai.quran_complete"
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        minSdk = 24
+        targetSdk = 36
 
         versionCode = currentVersionCode
         versionName = currentVersionName
@@ -47,20 +47,14 @@ android {
         create("release") {
             keyAlias = keystoreProperties["keyAlias"] as String?
             keyPassword = keystoreProperties["keyPassword"] as String?
-
-            // 🔑 FIXED: Removed "app/" because the file is already inside the android/app folder
             storeFile = keystoreProperties["storeFile"]?.let { file("$it") }
-
             storePassword = keystoreProperties["storePassword"] as String?
         }
     }
 
     buildTypes {
         release {
-            // Secure production signing configuration assignment
             signingConfig = signingConfigs.getByName("release")
-
-            // Code optimization & compression flags for production deployment
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -73,4 +67,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+tasks.withType<JavaCompile> {
+    options.compilerArgs.add("-Xlint:-options")
 }

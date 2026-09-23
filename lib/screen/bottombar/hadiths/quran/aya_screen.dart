@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -28,6 +29,9 @@ class _AyaScreenState extends State<AyaScreen> {
   static const Color kBrandGreen = Color(0xFF006B3C);
   static const Color kHeaderLightGreen = Color(0xFFD0E8D8);
 
+  // 🌟 Keep track of the stream subscription in your State class
+  StreamSubscription<int>? _suraChangeSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -36,6 +40,14 @@ class _AyaScreenState extends State<AyaScreen> {
 
     // ✅ Listen to list position shifts to move the scroll thumb dynamically as you scroll normally
     _itemPositionsListener.itemPositions.addListener(_updateScrollbarFromList);
+
+    // 🌟 Listen to automatic Sura transitions using context.read<AudioController>()
+    _suraChangeSubscription = context.read<AudioController>().onSuraChanged.listen((newSuraId) {
+      if (!mounted) return;
+
+      // Automatically fetch and load the new Surah data on this same screen
+      _controller.fetchAyas(newSuraId);
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -46,6 +58,7 @@ class _AyaScreenState extends State<AyaScreen> {
 
   @override
   void dispose() {
+    _suraChangeSubscription?.cancel();
     _controller.removeListener(_onControllerUpdate);
     _itemPositionsListener.itemPositions.removeListener(_updateScrollbarFromList);
     super.dispose();
@@ -169,6 +182,7 @@ class _AyaScreenState extends State<AyaScreen> {
           return Stack(
             children: [
               // 1. Core Scroll View Area (goes edge-to-edge for wide tracking)
+              // 1. Core Scroll View Area (goes edge-to-edge for wide tracking)
               ScrollablePositionedList.builder(
                 itemScrollController: _itemScrollController,
                 itemPositionsListener: _itemPositionsListener,
@@ -177,7 +191,7 @@ class _AyaScreenState extends State<AyaScreen> {
                 itemBuilder: (context, index) {
                   final aya = ayas[index];
                   final rawId = aya['aya_id'] ?? aya['verse_id'];
-                  final int currentItemAyaId = int.parse(rawId.toString());
+                  final int ayaId = int.tryParse(rawId?.toString() ?? '') ?? 0;
 
                   // Safely resolve explicit IDs into matching Strings for global array lookups
                   final String targetSuraId = (aya['sura_id'] ?? '').toString();
@@ -186,7 +200,7 @@ class _AyaScreenState extends State<AyaScreen> {
                   return Selector<AudioController, ({int currentEngineAyaId, bool playing})>(
                     selector: (_, ac) => (currentEngineAyaId: ac.currentAyaIndex, playing: ac.isPlaying),
                     builder: (context, audioState, child) {
-                      final bool isCurrentPlaying = audioState.currentEngineAyaId == currentItemAyaId;
+                      final bool isCurrentPlaying = audioState.currentEngineAyaId == ayaId;
                       final bool isEngineActive = audioState.playing;
                       final audioController = context.read<AudioController>();
 
@@ -223,7 +237,7 @@ class _AyaScreenState extends State<AyaScreen> {
                                           borderRadius: BorderRadius.circular(20),
                                         ),
                                         child: Text(
-                                          'Aya $currentItemAyaId',
+                                          'Aya $ayaId',
                                           style: TextStyle(
                                             color: isCurrentPlaying ? Colors.white : kBrandGreen,
                                             fontSize: 11,
@@ -288,20 +302,22 @@ class _AyaScreenState extends State<AyaScreen> {
                                         ),
                                         onPressed: () {
                                           if (audioController.isBuffering) {
-                                            debugPrint("⏳ Audio engine is busy loading/swapping tracks. Tap ignored.");
+                                            debugPrint("⏳ Audio engine is busy loading tracks. Tap ignored.");
                                             return;
                                           }
 
                                           if (isEngineActive && isCurrentPlaying) {
                                             audioController.pause();
                                           } else {
-                                            int reliablePlaybackIndex = audioController.findIndexByAyaId(currentItemAyaId);
+                                            final int currentSuraId = int.tryParse(widget.sura['id'].toString()) ?? 1;
 
-                                            if (reliablePlaybackIndex != -1) {
-                                              audioController.playAyaAudio(reliablePlaybackIndex, ayas);
-                                            } else {
-                                              audioController.playAyaAudio(index, ayas);
-                                            }
+                                            // 🔥 Cleanly triggers cross-Surah continuous playback without modifying DashboardController
+                                            audioController.playContinuousFromSurahFast(
+                                              currentSuraId,
+                                              ayaId,
+                                              ayas, // 👈 Passes the already loaded verses for instant startup!
+                                              controller.suras,
+                                            );
                                           }
                                         },
                                       )
